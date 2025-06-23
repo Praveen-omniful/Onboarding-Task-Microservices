@@ -10,15 +10,15 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	commonsHttp "github.com/omniful/go_commons/http"
 	logger "github.com/omniful/go_commons/log"
+	"github.com/omniful/ims-service/internal/api/handlers"
 	"github.com/omniful/ims-service/internal/config"
-)
-
-// Global variables
-var (
-	dbRedisClient *redis.Client
+	"github.com/omniful/ims-service/internal/repository"
+	"github.com/omniful/ims-service/internal/service"
+	"github.com/omniful/ims-service/pkg/constants"
 )
 
 func main() {
@@ -35,13 +35,27 @@ func main() {
 	if err := config.InitDB(cfg); err != nil {
 		logger.Error("Failed to initialize database: " + err.Error())
 		os.Exit(1)
+	} else {
+		logger.Info("Database initialized successfully")
 	}
 
 	// Initialize Redis client
 	redisClient := initializeRedis()
 
-	// Set global variables
-	dbRedisClient = redisClient
+	// Initialize repositories in correct order (due to dependencies)
+	hubRepo := repository.NewHubRepository(config.DBCluster, redisClient)
+	skuRepo := repository.NewSKURepository(config.DBCluster, redisClient)
+	inventoryRepo := repository.NewInventoryRepository(config.DBCluster, hubRepo, skuRepo, redisClient)
+
+	// Initialize services
+	hubService := service.NewHubService(hubRepo)
+	skuService := service.NewSKUService(skuRepo)
+	inventoryService := service.NewInventoryService(inventoryRepo, hubRepo, skuRepo)
+
+	// Initialize handlers
+	hubHandler := handlers.NewHubHandler(hubService)
+	skuHandler := handlers.NewSKUHandler(skuService)
+	inventoryHandler := handlers.NewInventoryHandler(inventoryService)
 
 	// Initialize server with custom timeouts
 	server := commonsHttp.InitializeServer(
@@ -55,16 +69,152 @@ func main() {
 	// Create a router group for API v1
 	api := server.Group("/api/v1")
 
-	// Set up routes
-	setupRoutes(api)
+	// Register real database-backed routes
+	hubHandler.RegisterRoutes(api)
+	skuHandler.RegisterRoutes(api)
+	inventoryHandler.RegisterRoutes(api)
+
+	// Add validation endpoint for OMS integration
+	api.POST("/validate", func(c *gin.Context) {
+		var req struct {
+			SKU      string    `json:"sku" binding:"required"`
+			HubID    string    `json:"hub_id" binding:"required"`
+			TenantID uuid.UUID `json:"tenant_id"`
+		}
+
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(400, gin.H{"error": constants.ErrInvalidRequest})
+			return
+		}
+
+		// Get tenant ID from header if not in body
+		if req.TenantID == uuid.Nil {
+			tenantIDStr := c.GetHeader("tenant_id")
+			if tenantIDStr == "" {
+				c.JSON(400, gin.H{"error": "tenant_id header or field is required"})
+				return
+			}
+			tenantID, err := uuid.Parse(tenantIDStr)
+			if err != nil {
+				c.JSON(400, gin.H{"error": "invalid tenant_id"})
+				return
+			}
+			req.TenantID = tenantID
+		}
+
+		// Real validation logic using database
+		ctx := c.Request.Context()
+
+		// Validate Hub
+		hub, err := hubService.GetHubByCode(ctx, req.TenantID, req.HubID)
+		hubValid := err == nil && hub != nil && hub.IsActive
+
+		// Validate SKU
+		sku, err := skuService.GetSKUByCode(ctx, req.TenantID, req.SKU)
+		skuValid := err == nil && sku != nil && sku.IsActive
+
+		c.JSON(200, gin.H{
+			"sku_valid": skuValid,
+			"hub_valid": hubValid,
+			"valid":     skuValid && hubValid,
+			"message":   "Validation completed",
+		})
+	})
+
+	// Batch validation endpoint
+	api.POST("/validate/batch", func(c *gin.Context) {
+		var req struct {
+			TenantID uuid.UUID `json:"tenant_id"`
+			Orders   []struct {
+				SKU   string `json:"sku"`
+				HubID string `json:"hub_id"`
+			} `json:"orders"`
+		}
+
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(400, gin.H{"error": constants.ErrInvalidRequest})
+			return
+		}
+
+		// Get tenant ID from header if not in body
+		if req.TenantID == uuid.Nil {
+			tenantIDStr := c.GetHeader("tenant_id")
+			if tenantIDStr == "" {
+				c.JSON(400, gin.H{"error": "tenant_id header or field is required"})
+				return
+			}
+			tenantID, err := uuid.Parse(tenantIDStr)
+			if err != nil {
+				c.JSON(400, gin.H{"error": "invalid tenant_id"})
+				return
+			}
+			req.TenantID = tenantID
+		}
+
+		ctx := c.Request.Context()
+		results := make([]gin.H, len(req.Orders))
+
+		for i, order := range req.Orders {
+			// Validate Hub
+			hub, err := hubService.GetHubByCode(ctx, req.TenantID, order.HubID)
+			hubValid := err == nil && hub != nil && hub.IsActive
+
+			// Validate SKU
+			sku, err := skuService.GetSKUByCode(ctx, req.TenantID, order.SKU)
+			skuValid := err == nil && sku != nil && sku.IsActive
+
+			results[i] = gin.H{
+				"sku":       order.SKU,
+				"hub_id":    order.HubID,
+				"sku_valid": skuValid,
+				"hub_valid": hubValid,
+				"valid":     skuValid && hubValid,
+			}
+		}
+
+		c.JSON(200, gin.H{
+			"message": "Batch validation completed",
+			"results": results,
+			"count":   len(results),
+		})
+	})
 
 	// Basic routes
 	server.GET("/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "ok"})
+		redisStatus := "disconnected"
+		if redisClient != nil {
+			if _, err := redisClient.Ping(context.Background()).Result(); err == nil {
+				redisStatus = "connected"
+			}
+		}
+
+		dbStatus := "disconnected"
+		if config.DBCluster != nil {
+			dbStatus = "connected"
+		}
+
+		c.JSON(200, gin.H{
+			"status":    "healthy",
+			"service":   "ims-service",
+			"timestamp": time.Now().Format(time.RFC3339),
+			"redis":     redisStatus,
+			"database":  dbStatus,
+			"version":   "1.0.0",
+		})
 	})
 
 	server.GET("/", func(c *gin.Context) {
-		c.JSON(200, gin.H{"message": "IMS Service is running!"})
+		c.JSON(200, gin.H{
+			"message": "IMS Service is running with real PostgreSQL database!",
+			"version": "1.0.0",
+			"endpoints": []string{
+				constants.EndpointHealth,
+				constants.EndpointHubs,
+				constants.EndpointSKUs,
+				constants.EndpointInventory,
+				constants.EndpointValidation,
+			},
+		})
 	})
 
 	// Print all registered routes
@@ -103,7 +253,7 @@ func printRoutes(router *gin.Engine) {
 	for _, route := range router.Routes() {
 		fmt.Printf("%s\t%s\t-> %s\n", route.Method, route.Path, route.Handler)
 	}
-	fmt.Println("========================\n")
+	fmt.Println("========================")
 }
 
 func initializeRedis() *redis.Client {

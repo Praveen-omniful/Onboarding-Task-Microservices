@@ -1,20 +1,21 @@
 package config
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/caarlos0/env/v7"
 )
 
 type Config struct {
-	Env     string `env:"ENV" envDefault:"development"`
-	Server  ServerConfig
+	Env      string `env:"ENV" envDefault:"development"`
+	Server   ServerConfig
 	Database DatabaseConfig
 	Redis    RedisConfig
 }
 
 type ServerConfig struct {
-	Port                   string        `env:"SERVER_PORT" envDefault:":8080"`
+	Port                    string        `env:"SERVER_PORT" envDefault:":8080"`
 	GracefulShutdownTimeout time.Duration `env:"GRACEFUL_SHUTDOWN_TIMEOUT" envDefault:"10s"`
 }
 
@@ -54,4 +55,10 @@ func LoadConfig() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// GetConnectionString returns the PostgreSQL connection string
+func (d *DatabaseConfig) GetConnectionString() string {
+	return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s",
+		d.User, d.Password, d.Host, d.Port, d.DBName, d.SSLMode)
 }

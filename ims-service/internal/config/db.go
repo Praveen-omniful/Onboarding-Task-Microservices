@@ -12,26 +12,24 @@ var DBCluster *postgres.DbCluster
 
 // InitDB initializes the database connection using your config
 func InitDB(cfg *Config) error {
+	// Use the configuration from environment variables (docker-compose setup)
 	masterConfig := postgres.DBConfig{
 		Host:     cfg.Database.Host,
 		Port:     cfg.Database.Port,
 		Username: cfg.Database.User,
 		Password: cfg.Database.Password,
 		Dbname:   cfg.Database.DBName,
-		// Add these fields to your Config struct if not present:
-		// MaxOpenConns:    cfg.Database.MaxOpenConns,
-		// MaxIdleConns:    cfg.Database.MaxIdleConns,
-		// ConnMaxLifetime: cfg.Database.ConnMaxLifetime,
-		// DebugMode:       cfg.Database.DebugMode,
 	}
 
 	slavesConfig := make([]postgres.DBConfig, 0) // for read replicas, if any
 
-	log.Println("Connecting to the database...")
+	log.Printf("Connecting to database: host=%s port=%s dbname=%s user=%s",
+		masterConfig.Host, masterConfig.Port, masterConfig.Dbname, masterConfig.Username)
+
 	db := postgres.InitializeDBInstance(masterConfig, &slavesConfig)
 	if db == nil {
-		log.Panic("Failed to connect to the database")
-		return fmt.Errorf("failed to connect to the database")
+		log.Printf("Failed to connect to the database - DBCluster is nil")
+		return fmt.Errorf("failed to connect to the database - DBCluster is nil")
 	}
 	DBCluster = db
 	log.Println("Database connected successfully!")
