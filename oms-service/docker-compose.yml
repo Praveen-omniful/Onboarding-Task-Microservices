@@ -1,0 +1,40 @@
+version: '3.8'
+services:
+  localstack:
+    image: localstack/localstack:3
+    environment:
+      - SERVICES=s3,sqs,kafka
+      - DEFAULT_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=dummy
+      - AWS_SECRET_ACCESS_KEY=dummy
+      - KAFKA_PROVIDER=localstack
+    ports:
+      - "4566:4566" # Edge port
+      - "19092:9092" # Kafka (changed from 9092:9092)
+    volumes:
+      - ./localstack:/var/lib/localstack
+      - ~/.aws:/root/.aws
+    networks:
+      - oms-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      timeout: 2s
+      retries: 20
+  oms-service:
+    build: .
+    depends_on:
+      localstack:
+        condition: service_healthy
+    environment:
+      - AWS_ACCESS_KEY_ID=dummy
+      - AWS_SECRET_ACCESS_KEY=dummy
+      - AWS_REGION=us-east-1
+      - AWS_S3_ENDPOINT=http://localstack:4566
+    ports:
+      - "8080:8080"
+    networks:
+      - oms-net
+networks:
+  oms-net:
+    driver: bridge

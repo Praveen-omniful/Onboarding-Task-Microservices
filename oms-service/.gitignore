@@ -1,0 +1,51 @@
+# Binaries
+*.exe
+*.dll
+*.so
+*.dylib
+oms-service
+oms-server*
+server.exe
+main.exe
+
+# Test output
+*.test
+*.out
+
+# Dependency directories
+vendor/
+
+# Go workspace file
+go.work
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+service.log
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+nohup.out
+
+# Runtime generated files
+invalid_records/*.csv
+!invalid_records/.gitkeep
+
+# Local development files
+test_*.csv
+sample_*.csv
+live_*.csv
+!test_orders.csv

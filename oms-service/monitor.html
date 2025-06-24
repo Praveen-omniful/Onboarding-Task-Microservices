@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>OMS Processing Monitor</title>
+    <style>
+        body { 
+            font-family: Arial; 
+            max-width: 1200px; 
+            margin: 20px auto; 
+            padding: 20px; 
+            background: #f5f5f5;
+        }
+        .card { 
+            background: white; 
+            padding: 20px; 
+            margin: 15px 0; 
+            border-radius: 8px; 
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .status { padding: 10px; border-radius: 4px; margin: 5px 0; }
+        .success { background: #d4edda; color: #155724; }
+        .warning { background: #fff3cd; color: #856404; }
+        .error { background: #f8d7da; color: #721c24; }
+        .info { background: #d1ecf1; color: #0c5460; }
+        button { 
+            background: #007bff; 
+            color: white; 
+            border: none; 
+            padding: 10px 20px; 
+            border-radius: 4px; 
+            cursor: pointer; 
+            margin: 5px;
+        }
+        button:hover { background: #0056b3; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background-color: #f8f9fa; }
+        .auto-refresh { color: #666; font-size: 12px; }
+    </style>
+    <script>
+        let autoRefresh = false;
+        let refreshInterval;
+
+        async function fetchData(endpoint) {
+            try {
+                const response = await fetch(`http://localhost:8087${endpoint}`);
+                return await response.json();
+            } catch (error) {
+                return { error: error.message };
+            }
+        }
+
+        async function updateProcessingStatus() {
+            const data = await fetchData('/processing-status');
+            const container = document.getElementById('status-container');
+            
+            if (data.error) {
+                container.innerHTML = `<div class="status error">❌ Cannot connect to OMS service: ${data.error}</div>`;
+                return;
+            }
+
+            let html = `
+                <div class="status success">✅ Last Updated: ${data.timestamp}</div>
+                <h3>🔧 Service Status</h3>
+                <div class="status ${data.services.mongodb.includes('connected') ? 'success' : 'warning'}">
+                    MongoDB: ${data.services.mongodb}
+                </div>
+                <div class="status ${data.services.s3.includes('available') ? 'success' : 'warning'}">
+                    S3: ${data.services.s3}
+                </div>
+                <div class="status info">SQS: ${data.services.sqs}</div>
+                <div class="status ${data.services.kafka === 'true' ? 'success' : 'warning'}">
+                    Kafka: ${data.services.kafka === 'true' ? 'Enabled' : 'Disabled'}
+                </div>
+                
+                <h3>📊 Processing Statistics</h3>
+                <div class="status info">
+                    Total Orders: ${data.processing_stats?.total_orders || 0}<br>
+                    Total Revenue: $${data.processing_stats?.total_revenue || 0}<br>
+                    Average Order: $${data.processing_stats?.average_order || 0}<br>
+                    Invalid Files: ${data.invalid_files}
+                </div>
+
+                <h3>📝 Recent Orders (Last 10)</h3>
+            `;
+
+            if (data.recent_orders && data.recent_orders.length > 0) {
+                html += `<table>
+                    <tr><th>Order ID</th><th>Status</th><th>Amount</th><th>Created</th></tr>`;
+                data.recent_orders.forEach(order => {
+                    html += `<tr>
+                        <td>${order.order_id}</td>
+                        <td><span class="status ${order.status === 'on_hold' ? 'warning' : 'success'}">${order.status}</span></td>
+                        <td>$${order.total_amount}</td>
+                        <td>${new Date(order.created_at).toLocaleString()}</td>
+                    </tr>`;
+                });
+                html += `</table>`;
+            } else {
+                html += `<div class="status warning">No recent orders found</div>`;
+            }
+
+            container.innerHTML = html;
+        }
+
+        async function updateOrderStats() {
+            const data = await fetchData('/stats');
+            const container = document.getElementById('stats-container');
+            
+            if (data.error) {
+                container.innerHTML = `<div class="status error">❌ Stats Error: ${data.error}</div>`;
+                return;
+            }
+
+            container.innerHTML = `
+                <div class="status success">
+                    📈 Total Orders: ${data.total_orders || 0}<br>
+                    💰 Total Revenue: $${data.total_revenue || 0}<br>
+                    📊 Average Order: $${(data.total_revenue / data.total_orders || 0).toFixed(2)}<br>
+                    📅 Last Processed: ${data.last_processed || 'N/A'}
+                </div>
+            `;
+        }
+
+        function toggleAutoRefresh() {
+            autoRefresh = !autoRefresh;
+            const button = document.getElementById('auto-refresh-btn');
+            const status = document.getElementById('auto-refresh-status');
+            
+            if (autoRefresh) {
+                button.textContent = '⏸️ Stop Auto Refresh';
+                button.style.background = '#dc3545';
+                status.textContent = 'Auto-refreshing every 5 seconds...';
+                refreshInterval = setInterval(() => {
+                    updateProcessingStatus();
+                    updateOrderStats();
+                }, 5000);
+            } else {
+                button.textContent = '▶️ Start Auto Refresh';
+                button.style.background = '#007bff';
+                status.textContent = 'Auto-refresh stopped';
+                clearInterval(refreshInterval);
+            }
+        }
+
+        function refreshAll() {
+            updateProcessingStatus();
+            updateOrderStats();
+        }
+
+        // Initial load
+        document.addEventListener('DOMContentLoaded', function() {
+            refreshAll();
+        });
+    </script>
+</head>
+<body>
+    <h1>🚀 OMS Processing Monitor</h1>
+    
+    <div class="card">
+        <h2>🎛️ Controls</h2>
+        <button onclick="refreshAll()">🔄 Refresh Now</button>
+        <button id="auto-refresh-btn" onclick="toggleAutoRefresh()">▶️ Start Auto Refresh</button>
+        <button onclick="window.open('http://localhost:8087/upload', '_blank')">📤 Upload CSV</button>
+        <button onclick="window.open('http://localhost:8087/orders', '_blank')">📋 View All Orders</button>
+        <div id="auto-refresh-status" class="auto-refresh">Manual refresh mode</div>
+    </div>
+
+    <div class="card">
+        <h2>📊 Quick Stats</h2>
+        <div id="stats-container">Loading...</div>
+    </div>
+
+    <div class="card">
+        <h2>🔍 Detailed Processing Status</h2>
+        <div id="status-container">Loading...</div>
+    </div>
+
+    <div class="card">
+        <h2>❓ How to Check CSV Processing</h2>
+        <div class="status info">
+            <strong>After uploading a CSV file:</strong><br>
+            1. 📈 <strong>Total Orders</strong> should increase<br>
+            2. 🕒 <strong>Recent Orders</strong> will show new entries<br>
+            3. 📝 Check <strong>Order Status</strong> (usually "on_hold" initially)<br>
+            4. ⚠️ If processing fails, check <strong>Invalid Files</strong> count<br>
+            5. 🔄 Use <strong>Auto Refresh</strong> to monitor in real-time
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>🔗 Direct API Endpoints</h2>
+        <div class="status info">
+            • <a href="http://localhost:8087/stats" target="_blank">GET /stats</a> - Order statistics<br>
+            • <a href="http://localhost:8087/orders" target="_blank">GET /orders</a> - All orders<br>
+            • <a href="http://localhost:8087/processing-status" target="_blank">GET /processing-status</a> - Processing status<br>
+            • <a href="http://localhost:8087/upload-history" target="_blank">GET /upload-history</a> - Upload batches<br>
+            • <a href="http://localhost:8087/invalid-files" target="_blank">GET /invalid-files</a> - Invalid files<br>
+            • <a href="http://localhost:8087/health" target="_blank">GET /health</a> - Health check
+        </div>
+    </div>
+</body>
+</html>
