@@ -48,6 +48,13 @@ test_*.csv
 compass_*.csv
 final_*.csv
 
+# Additional test files from development
+kafka_test*.csv
+corrected_orders.csv
+sqs_test.csv
+ims_integration_test.csv
+sample_orders_500.csv
+
 # OS generated files
 .DS_Store
 .DS_Store?
@@ -64,6 +71,9 @@ node_modules/
 tmp/
 temp/
 *.tmp
+nul
+ims_debug.log
+oms_kafka.log
 
 # Docker volumes
 pgdata/
